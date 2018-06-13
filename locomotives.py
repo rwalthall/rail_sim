@@ -147,7 +147,8 @@ class Locomotive(Rolling_stock):
             # that it does not exceed the locomotives adhesion on the rails
         path.track_class(train.location)
         adhesion_limit = self.weight * 1000 * gravity * path.adhesion
-        self.dynamic_brake_force = min(self.dynamic_brake_force, 
+        #train.dynamic_brake is the train's application of the dynamic brake, ranging from 0.0 to 1.0
+        self.dynamic_brake_force = min(self.dynamic_brake_force * train.dynamic_brake, 
                                        adhesion_limit)
 
 
@@ -265,8 +266,10 @@ class electric(Locomotive):
         
         else:
             self.power_return = self.regenerative_brake_force * train.speed
-            self.dynamic_brake_force = self.regenerative_brake_force
+            #train.dynamic_brake is the train's application of the dynamic brake, ranging from 0.0 to 1.0
+            self.dynamic_brake_force = self.regenerative_brake_force * train.dynamic_brake
             self.return_limited = False
+        
         
     def calculate_brake_force(self,train,path):
         self.air_brake(train,path)

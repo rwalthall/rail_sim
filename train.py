@@ -10,6 +10,7 @@ from railcar import Railcar
 from locomotives import Locomotive
 import route
 from constants import gravity, timestep
+import constants
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -83,7 +84,15 @@ class Train(object):
         #the train will start from rest
         #speed should always be in m/s
         self.speed = 0
+        self.speed_limit_exceded = False
+        #start with both the dynamic and air brakes off
+        self.dynamic_brake = 0
+        #the air brake system's state is described by the service level
+            #applying a full service brake from the air brakes would here be 
+            #represented by setting the service level to 1.0
         self.service_level = 0
+        #emergency brakes can be applied to apply a force beyond the full 
+            #service level through the air brake system
         self.emergency_brake = False
         #the train will start on the route with the rear at the location 0
         self.location = self.length
@@ -152,9 +161,6 @@ class Train(object):
         self.power = sum([locomotive.power for locomotive in self.locomotives])
     
     def calculate_total_brake_force(self):
-        '''
-        write a routine to determine the service level of the air brake system
-        '''
         self.brake_force = 0
         for component in self.consist:
             component.calculate_brake_force(self, path)
@@ -176,15 +182,18 @@ class Train(object):
         separate out the resistive forces that can act when the train is at rest
         such as grade resistance
         '''
-        resistance = min(available_traction,
-                         self.total_resistance + self.brake_force)
+        resistance = self.total_resistance + self.brake_force
+        
+        if resistance > available_traction:
+            if self.power == 0:
+                resistance = available_traction
         
         #Thank you, Isaac
         self.acceleration = (available_traction - resistance)/(self.mass*1000)
         
         
         
-    def calculate_throttle(self):
+    def calculate_throttle(self, path):
         #three cases:
             #1)current speed is below the speed limit
             #2)current speed is at the speed limit, but a lower speed limit is
@@ -192,25 +201,91 @@ class Train(object):
             #3)current speed is at the speed limit, and there is no change ahead
         
         path.current_speed_limit(self.location)
+        speed_limit = path.speed_limit
         desired_speed = path.speed_limit
         
-        if path.determine_speed_limit(self.location + 3000) < desired_speed:
-            desired_speed = path.determine_speed_limit(self.location + 3000)
-            
-        if desired_speed > train.speed:
+        if (path.determine_speed_limit(self.location + constants.lookahead) 
+        < desired_speed):
+            desired_speed = (path.determine_speed_limit(self.location 
+                                                        + constants.lookahead))
+        
+        #check if the train has passed the speed limit for the route
+        if self.speed > speed_limit:
+            self.speed_limit_exceded = True
+        
+        
+        
+        #set a threshold below the desired speed within which we don't care about
+            #accelerating the train further
+        upper_threshold = constants.upper_threshold
+        lower_threshold = constants.lower_threshold
+        
+        throttle_changed = False
+        
+        if self.speed < desired_speed - lower_threshold:
             #advance the throttle one notch if possible
             if self.throttle < self.max_throttle:
-                self.throttle += 1   
-                #set the throttle in each locomotive to the new position
-                for locomotive in self.locomotives:
-                    #this locomotive method automatically recalculates the locomotive's
-                        #new power
-                    locomotive.throttle(self.throttle)
-                #recalculate the total power for the train
-                self.calculate_power()
+                self.throttle += 1
+                throttle_changed = True
+        if self.speed > desired_speed - upper_threshold:
+            #lower the throttle one notch if possible
+            if self.throttle > 0:
+                self.throttle -= 1
+                throttle_changed = True
+        
+        if throttle_changed:
+            #set the throttle in each locomotive to the new position
+            for locomotive in self.locomotives:
+                #this locomotive method automatically recalculates the locomotive's
+                    #new power
+                locomotive.throttle(self.throttle)
+            #recalculate the total power for the train
+            self.calculate_power()
 
-    def calculate_brake_application(self):
-        pass
+    def calculate_brake_application(self, path):
+        '''
+        
+        using a different method from the following for now
+        
+        #determine what the train's likely speed would be at 0 throttle after
+        #three km (the lookahead distance defined in constants.py), 
+        #and decide if that puts us over the speed limit
+        #for now, we'll assume constant acceleration
+        
+        acceleration_without_power = -self.total_resistance/(self.mass*1000)
+        potential_speed = ((2*acceleration_without_power*constants.lookahead) 
+                           + self.speed**2)**0.5
+        '''
+        desired_speed = min(path.determine_speed_limit(self.location 
+                                                   + constants.lookahead),
+                            path.determine_speed_limit(self.location))
+        
+        #determine the additional brake force necessary to reach the desired 
+        #speed in the required distance
+        needed_brake_force = ((self.mass*1000*(self.speed**2 - desired_speed**2)
+                              /(2*constants.lookahead)) 
+                              - self.total_resistance - self.brake_force)
+        
+        #if the needed_brake_force is positive, we need to apply some brakes:
+        if needed_brake_force > 0:
+            #first increase the dynamic brake if possible:
+            if self.dynamic_brake < 1.0:
+                self.dynamic_brake += constants.dynamic_brake_increment
+            #if the dynamic brake is already saturated, resort to the air brake system:
+            elif self.service_level < 1.0:
+                self.service_level += constants.air_brake_increment
+        #if the needed_brake_force is negative, we need to release some brakes:
+        else:
+            #release the air brake first:
+            if self.service_level > 0:
+                self.service_level -= constants.air_brake_increment
+            elif self.dynamic_brake > 0:
+                self.dynamic_brake -= constants.dynamic_brake_increment
+        
+
+
+            
+        
     
     def apply_air_brake(self, path):
         for k in range(len(self.consist)):
@@ -229,14 +304,14 @@ class Train(object):
             else:
                 self.consist[k].update_resistance(self, path)
 
-        self.calculate_throttle()
-        self.calculate_brake_application()                
+        self.calculate_throttle(path)
+        self.calculate_brake_application(path)     
+        self.calculate_total_brake_force()
         
         self.calculate_total_resistance()
         self.calculate_power()
         self.calculate_acceleration()
 
-        
 path = route.Route(100000)
 train = Train()
 
@@ -250,6 +325,7 @@ times = [time]
 velocities = [train.speed]
 accelerations = [train.acceleration]
 locations = [train.location]
+elevations = [path.elevation(train.location)]
 
 
 while train.location < (100000 - 100):
@@ -262,6 +338,7 @@ while train.location < (100000 - 100):
     velocities.append(train.speed)
     accelerations.append(train.acceleration)
     locations.append(train.location)
+    elevations.append(path.elevation(train.location))
 
 print(train.location)
 print(train.speed)
@@ -271,19 +348,20 @@ times = np.array(times)
 velocities = np.array(velocities)
 accelerations = np.array(accelerations)
 locations = np.array(locations)
+elevations = np.array(elevations)
 
-speed_at_xkm = True
-for k in range(velocities.shape[0]):
-#    if speed_at_xkm:
-#        if locations[k] > 4*1000:
-#            print(str(round(velocities[k]/train.speed*100,0)) + "%")
-#            speed_at_xkm = False
-    if velocities[k] > 0.50*train.speed:
-        print(str(times[k]/60) + " minutes")
-        print(str(round(locations[k]/1000,1)) + " km")
-        print(velocities[k])
-        print(k)
-        break
+#speed_at_xkm = True
+#for k in range(velocities.shape[0]):
+##    if speed_at_xkm:
+##        if locations[k] > 4*1000:
+##            print(str(round(velocities[k]/train.speed*100,0)) + "%")
+##            speed_at_xkm = False
+#    if velocities[k] > 0.50*train.speed:
+#        print(str(times[k]/60) + " minutes")
+#        print(str(round(locations[k]/1000,1)) + " km")
+#        print(velocities[k])
+#        print(k)
+#        break
 
 
 fig = plt.figure()

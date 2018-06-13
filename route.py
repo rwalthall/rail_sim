@@ -17,7 +17,10 @@ class Route(object):
     def __init__(self,length):
         self.length = length
     def elevation(self,x):
-        return 200
+        if x < 50000:
+            return 200 + 0.01*x
+        else:
+            return 200 + 0.01*50000 - 0.01*(x - 50000)
     def curvature(self,x):
         return 0
     def track_class(self,x):
@@ -28,7 +31,7 @@ class Route(object):
         self.speed_limit = 60*1.6
     
     def determine_speed_limit(self,x):
-        return 60*1.6
+        return 40*1.6/3.6
     
     def track_adhesion(self,x):
         self.adhesion = 0.30

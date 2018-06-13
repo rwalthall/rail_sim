@@ -260,7 +260,7 @@ class Rolling_stock(object):
                             v2 = friction_coefficient_speeds[k + 1]
                             break
 
-            return linear_interpolation(v,v1,v2,f1,f2)
+            return linear_interpolation(v,v1,v2,f1,f2)/100
         
         if train.emergency_brake:
             train.service_level == 1.0

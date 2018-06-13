@@ -5,19 +5,17 @@ Created on Mon May 28 08:52:38 2018
 
 @author: Walthall
 """
-gravity = 9.81 #m/s^2
+from constants import gravity
 temperature = 20 #degrees Celsius
-import route
+#import route
 import density
 import os, csv
-import numpy as np
-import math
-import matplotlib.pyplot as plt
+#import numpy as np
+#import matplotlib.pyplot as plt
 import time as tm
 
 start_time = tm.time()
 
-timestep = 10.0
 
 class Rolling_stock(object):
     
@@ -212,7 +210,7 @@ class Rolling_stock(object):
         
         self.calculate_total_resistance()
         
-    def air_brake(self, train, path, service_level):
+    def air_brake(self, train, path):
 #        if train.emergency_brake:
 #            #the emergency air brake is generally 20-30% stronger than the 
 #                #service air brake, according to 
@@ -265,9 +263,9 @@ class Rolling_stock(object):
             return linear_interpolation(v,v1,v2,f1,f2)
         
         if train.emergency_brake:
-            service_level == 1.0
+            train.service_level == 1.0
         
-        if service_level == 0:
+        if train.service_level == 0:
             self.air_brake_force = 0
         else:
             #The friction coefficient should determine the maximum breaking potential for a full-service brake
@@ -275,13 +273,13 @@ class Rolling_stock(object):
             self.air_brake_force = (gravity * 1000 * self.tare * path.adhesion
                                     * self.brake_percent 
                                     * friction_coefficient(train.speed)
-                                    /friction_coefficient(0))*service_level
+                                    /friction_coefficient(0))*train.service_level
         if train.emergency_brake:
             self.air_brake_force *= 1.3
 
     def calculate_brake_force(self,train,path):
-        self.air_brake(train,path,0)
-        self.brake_force = self.air_brake_force     
+        self.air_brake(train,path)
+        self.brake_force = self.air_brake_force
 
 #set to 'CN' for Canadian Nation, 'Davis' for original Davis, or Davis_mod for 
 #modified Davis
@@ -312,471 +310,10 @@ air_coefficients['Intermodal double-stack'] = {
         'C': 7.1,
         'a': 170}
 
-class Railcar(Rolling_stock):
-    
-    def __init__(self, car_type, length, axles, tare_weight, truck_spacing):
-        self.length = length #m
-        self.axles = axles
-        self.tare = tare_weight #tonnes
-        if truck_spacing == 'unknown':
-            self.truck_spacing = length * 0.72
-        else:
-            self.truck_spacing = truck_spacing
-        self.type = car_type
-        
-        self.brake_percent = 0.70
-        
-    
-    def loading(self,load):
-        '''
-        define the load on the railcar
-        in tonnes
-        '''
-        self.load = load
-        self.gross = self.tare + load
-        self.w = self.gross/self.axles
-
-class Locomotive(Rolling_stock):
-    
-    def __init__(self, length, axles, weight, power, traction, truck_spacing):
-        self.length = length
-        self.axles = axles
-        self.weight = weight
-        self.tare = weight
-        self.max_power = power
-        self.power = power
-        self.traction = traction
-        self.truck_spacing = truck_spacing
-        self.type = 'Leading Freight Locomotive'
-        
-        self.w = self.weight/self.axles
-        
-        self.gross = self.weight
-        
-        self.max_throttle = 8
-        self.brake_percent = 0.9
-    
-    def throttle(self, throttle_position):
-        self.throttle_position = throttle_position
-        self.power = (self.max_power 
-                      * (self.throttle_position/self.max_throttle)**2) #squared because the throttle notches are current based, see Iwnicki pp. 255-6
-    
-    def tractive_effort(self, path, train):
-        adhesion_limit = self.weight * 1000 * gravity * path.adhesion
-        
-        power_limit = self.max_power/train.speed
-        
-        Max_traction = 415000
-        torque_reduction = (Max_traction - 360000)/(28/3.6) #approximated from figure 9.28 of Iwnicki
-        current_limit = Max_traction - train.speed * torque_reduction
-        
-        self.traction = min(adhesion_limit, power_limit, current_limit)
-        
-        if self.traction == adhesion_limit:
-            self.traction_limiting_factor = "Adhesion"
-        elif self.traction == power_limit:
-            self.traction_limiting_factor = "Power"
-        else:
-            self.traction_limiting_factor = "Motor"
-            
-        #thermal adjustment - Tractive effort thermal derating curve
-        
-        derating = math.exp(train.run_time/(200*60)*math.log(270000/Max_traction))
-        self.traction *= derating
-    
-    def power_rate_application_limit(self):
-        #see Iwnicki, pp. 256-7
-        pass
-
-    def rheostatic_dynamic_brake(self, train, path):
-        #for diesel-electric locomotives, or electric locomotives that do not have 
-            #adequate capacity for power return
-        #based on figure 9.31 on page 259 of Iwnicki's Handbook
-        #velocity in kph, braking force in kN
-        
-        def linear_interpolation(x, x1, x2, y1, y2):
-            m = (y2 - y1)/(x2 - x1) #slope is rise over run
-            return y1 + m*(x - x1)
-        
-        #points of velocity vs force in the field and current limited regimes
-        v_points = [0.0,
-                    13.41176471,
-                    20.0,
-                    27.07317073,
-                    31.70731707,
-                    39.02439024,
-                    43.61445783,
-                    51.08433735]
-        F_points = [0.0,
-                    231.6666667,
-                    171.1864407,
-                    233.3333333,
-                    198.3050847,
-                    235.8333333,
-                    208.3333333,
-                    236.6666667]
-        
-        def voltage_limited_force():
-            #based on least square's inverse fit of the four data points in the voltage limited range
-            #an invrse function fit much better than an exponential function
-            a = 11106.0578548174
-            b = 3.8205311947127
-            if train.speed < b:
-                return 10**6
-            else:
-                return a/(train.speed - b)
-        
-        def commutator_limited_force():
-            #based on least square's inverse fit of the four data points in the commutator limited range
-            #an invrse function fit much better than an exponential function
-            a = 3278.06787794513
-            b = 58.1194383702459
-            if train.speed < b:
-                return 10**6
-            else:
-                return a/(train.speed - b)
-        
-        
-        def current_or_field_limited_force():
-            #define the velocity above which the linear field limited and current limited regimes end
-            #above this speed, the dynamic brakes are limited by the system's voltage or the motors' commutators
-            current_limit_velocity = 51.08433735
-            if train.speed < current_limit_velocity:
-                for k in range(len(v_points) - 1):
-                    if train.speed >= v_points[k]:
-                        v1 = v_points[k]
-                        v2 = v_points[k + 1]
-                        F1 = F_points[k]
-                        F2 = F_points[k + 1]
-                        F = linear_interpolation(train.speed,v1,v2,F1,F2)
-                    else:
-                        break
-                return F
-            else:
-                return 10**6
-    
-        self.dynamic_brake_force =  min(voltage_limited_force(), 
-                                            commutator_limited_force(), 
-                                            current_or_field_limited_force())
-
-
-    def calculate_brake_force(self,train,path):
-        self.air_brake(train,path,0)
-        self.rheostatic_dynamic_brake(train,path)
-        
-        self.brake_force = self.air_brake_force + self.dynamic_brake_force
-        
-        
-
-        
-    
-    def air_compressor(self):
-        '''
-        train_line_diameter = 1.25 * 2.54 #cm - assumes 1 1/4 inch diameter line, which is typical according to Hay
-        train_line_length = 1.03*train.length #assume the total line length is roughly 3% higher than the train length to account for slack betwixt cars
-        train_line_volume = (math.pi*(train_line_diameter/2)**2)*train_line_length
-        
-        brake_cylinder_diameter = 
-        brake_cylinder_radius = 
-        brak_cylinder_area = 
-        #brake_cylinder_full_service_length = 8*2.54 #cm - double check this in Hay
-        brake_cylinder_emergency_length = 
-        '''
-        pass
-        
-class diesel_electric(Locomotive):
-    pass
-
-class electric(Locomotive):
-    
-    def regenerative_dynamic_brake(self, train):
-        #for electric locomotives
-        #based on figure 9.31 on page 259 of Iwnicki's Handbook
-        #velocity in kph, braking force in kN
-        
-        def linear_interpolation(x, x1, x2, y1, y2):
-            m = (y2 - y1)/(x2 - x1) #slope is rise over run
-            return y1 + m*(x - x1)
-        
-        #points of velocity vs force in the field and current limited regimes
-        v_points = [0.0,
-                    14.19354839,
-                    50.0]
-        F_points = [0.0,
-                    237.2093023,
-                    236.0465116]
-        
-        def voltage_limited_force(v):
-            #based on least square's inverse fit of the four data points in the voltage limited range
-            #an invrse function fit much better than an exponential function
-            a = 11183.7781754323
-            b = 1.84558074479204
-            if v < b:
-                return 10**6
-            else:
-                return a/(v - b)
-        
-        def commutator_limited_force(v):
-            #based on least square's inverse fit of the four data points in the commutator limited range
-            #an invrse function fit much better than an exponential function
-            a = 3266.80579274212
-            b = 58.6341079332544
-            if v < b:
-                return 10**6
-            else:
-                return a/(v - b)
-        
-        
-        def current_or_field_limited_force(v):
-            #define the velocity above which the linear field limited and current limited regimes end
-            #above this speed, the dynamic brakes are limited by the system's voltage or the motors' commutators
-            current_limit_velocity = 50.0
-            if v < current_limit_velocity:
-                for k in range(len(v_points) - 1):
-                    if v >= v_points[k]:
-                        v1 = v_points[k]
-                        v2 = v_points[k + 1]
-                        F1 = F_points[k]
-                        F2 = F_points[k + 1]
-                        F = linear_interpolation(v,v1,v2,F1,F2)
-                    else:
-                        break
-                return F
-            else:
-                return 10**6
-        
-        self.regenerative_brake_force = min(voltage_limited_force(train.speed), 
-                    commutator_limited_force(train.speed), 
-                    current_or_field_limited_force(train.speed))
-        
-        self.power_return = self.regenerative_brake_force * train.speed
 
     
-    
-    
-    
 
 
-
-
-
-def build_unit_train(number_of_cars,tonnage_per_car, tare_weight, ruling_grade,
-                     loco_power, loco_traction,des_speed,C,a):
-    
-    #calculate number of locomotives
-    total_mass = number_of_cars * (tonnage_per_car + tare_weight)
-    car_weight = tare_weight + tonnage_per_car
-    
-    #the number of locomotives is determined by either the ruling grade or the
-    #desired speed
-    
-    #if ruling grade is the limiting factor, we care about the maximum tractive
-    #effort
-    grade_resistance = total_mass * gravity * ruling_grade * 1000
-    #for now, assume four axles per car
-    crawl_speed = 10 #mph
-    w = car_weight/1.1 / 4 #weight per axle in tons
-    R = (1.5 + 18/w + 0.03*crawl_speed*2.23694 + C*a*((crawl_speed*2.23694)**2)
-        /10000/(car_weight/1.1))
-    number_of_locomotives_grade = int((grade_resistance + R*(total_mass/1.1)*4.44822) / 
-                                loco_traction) + 1
-    
-    
-    #if the desired speed (on flat level terrain) is the limiting factor, we care
-    #about maximum power on flat level track
-    R = (1.5 + 18/w + 0.03*des_speed*2.23694 + C*a*((des_speed*2.23694)**2)
-        /10000/(car_weight/1.1))
-    tractive_effort = R*(total_mass/1.1)*4.44822 #in Newtons
-    Power = tractive_effort * des_speed
-    number_of_locomotives_speed = int(Power/loco_power) + 1
-    
-    number_of_locomotives = max(number_of_locomotives_grade, 
-                                number_of_locomotives_speed)
-    
-    '''
-    To do:
-    calculate the drawbar pull and see if any of the locomotives need to be placed
-    at the rear or middle
-    '''
-    
-    front = [Locomotive(20,6,100,2984*1000,0.40,15) for k in range(number_of_locomotives)]
-    cars = [Railcar('Intermodal double-stack',15,4,28.65,20.12) for k in range(number_of_cars)]
-    
-    #load the railcars
-    for k in cars:
-        k.loading(tonnage_per_car)
-    
-    return front + cars
-
-
-loco_power = 2984*1000
-max_tractive_effort = 423*1000*4.44822*0.40
-#train = build_unit_train(100,100,30,0.02,loco_power,max_tractive_effort,25,5,125)
-
-class Train(object):
-    def __init__(self):
-        self.consist = build_unit_train(100,100,30,0.02,loco_power,
-                                        max_tractive_effort,25,5,125)
-        #create separate lists for the locomotives and the railcars
-        self.locomotives = [k for k in self.consist if isinstance(k, Locomotive)]
-        self.loco_count = len(self.locomotives)
-        self.cars = [k for k in self.consist if isinstance(k, Railcar)]
-        self.car_count = len(self.cars)
-        
-        #calculate the train's total length
-        self.length = sum([k.length for k in self.consist])
-        #the train will start from rest
-        #speed should always be in m/s
-        self.speed = 0
-        self.emergency_brake = False
-        #the train will start on the route with the rear at the location 0
-        self.location = self.length
-        
-        self.mass = sum([k.gross for k in self.consist])
-        
-        self.head_end_power = 0
-        
-        #initialise the position, location, and resistance of each element
-        for k in range(len(self.consist)):
-            self.consist[k].position(k)
-            self.consist[k].calculate_location(self,path)
-            self.consist[k].initialise_resistances(self,path)
-            self.head_end_power += self.consist[k].HEP
-        
-        #before the train starts, it has not exceeded its maximum tractive effort
-        self.max_traction_exceded = False
-        self.maximum_tractive_effort = self.loco_count * max_tractive_effort
-        self.calculate_total_resistance()
-        self.calculate_power()
-        self.calculate_total_brake_force()
-        self.calculate_acceleration()
-        
-    
-    def calculate_total_resistance(self):
-        self.total_resistance = 0
-        for k in self.consist:
-            #add the resistance of each component
-            self.total_resistance += k.R
-        self.fraction_tractive_effort = (self.total_resistance
-                                         /self.maximum_tractive_effort)
-        #check if the total resistance is too high for the maximum tractive effort
-        if self.fraction_tractive_effort > 1:
-            self.max_traction_exceeded = True
-    
-    def calculate_power(self):
-        self.power = sum([locomotive.power for locomotive in self.locomotives])
-    
-    def calculate_total_brake_force(self):
-        self.brake_force = 0
-        for k in range(len(self.consist)):
-            self.consist[k].calculate_brake_force(self,path)
-            self.brake_force += self.consist[k].brake_force
-    
-    def calculate_acceleration(self):
-        if self.speed > 0:
-            available_traction = min(self.maximum_tractive_effort, 
-                                     (self.power - self.head_end_power)
-                                      /self.speed)
-        else:
-            available_traction = self.maximum_tractive_effort
-        
-        self.acceleration = (available_traction 
-                             - self.total_resistance 
-                             - self.brake_force)/(self.mass*1000)
-    
-    def update(self):
-        self.speed += self.acceleration * timestep
-        self.location += (self.speed*timestep 
-                          + 0.5*self.acceleration*timestep**2)
-        
-        #update the location and resistance of each car
-        for k in range(len(self.consist)):
-            self.consist[k].calculate_location(self,path)
-            if self.acceleration == 0:
-                self.consist[k].update_resistance_for_location(self, path)
-            else:
-                self.consist[k].update_resistance(self, path)
-        self.calculate_total_resistance()
-        self.calculate_power()
-        self.calculate_acceleration()
-
-        
-
-path = route.Route(100000)
-train = Train()
-
-
-time = 0
-times = [time]
-
-velocities = [train.speed]
-accelerations = [train.acceleration]
-locations = [train.location]
-
-
-while train.location < (100000 - 100):
-    
-    train.update()
-    
-    time += timestep
-    times.append(time)
-    
-    velocities.append(train.speed)
-    accelerations.append(train.acceleration)
-    locations.append(train.location)
-
-print(train.location)
-print(train.speed)
-print(time)
-
-times = np.array(times)
-velocities = np.array(velocities)
-accelerations = np.array(accelerations)
-locations = np.array(locations)
-
-speed_at_xkm = True
-for k in range(velocities.shape[0]):
-#    if speed_at_xkm:
-#        if locations[k] > 4*1000:
-#            print(str(round(velocities[k]/train.speed*100,0)) + "%")
-#            speed_at_xkm = False
-    if velocities[k] > 0.50*train.speed:
-        print(str(times[k]/60) + " minutes")
-        print(str(round(locations[k]/1000,1)) + " km")
-        print(velocities[k])
-        print(k)
-        break
-
-
-fig = plt.figure()
-fig.suptitle("Train acceleration distance")
-ax1 = fig.add_subplot(211)
-ax1.plot(times/60, velocities)
-plt.ylabel("speed, (m/s)")
-
-ax1.annotate('50% max speed\nafter two minutes',
-            xy=(2, velocities[12]), xycoords='data',
-            xytext=(100, -30), textcoords='offset points',
-            arrowprops=dict(arrowstyle="->",
-                            connectionstyle="arc3,rad=-.1"))
-
-ax1.annotate('90% max speed\nafter 10.5 minutes',
-            xy=(10.5, velocities[63]), xycoords='data',
-            xytext=(100, -30), textcoords='offset points',
-            arrowprops=dict(arrowstyle="->",
-                            connectionstyle="arc3,rad=-.1"))
-
-ax2 = fig.add_subplot(212)
-ax2.plot(times/60, locations/1000)
-plt.ylabel("distance traveled (km)")
-plt.xlabel("time, (minutes)")
-
-for ax in [ax1, ax2]:
-    ax.axvline(x = 2.0,  c = "black", linewidth = 0.5, linestyle = "dashed")
-    ax.axvline(x = 10.5, c = "black", linewidth = 0.5, linestyle = "dashed")
-
-plt.savefig("unit intermodal train acceleration profile",dpi = 330)
-plt.show()
 
 
 

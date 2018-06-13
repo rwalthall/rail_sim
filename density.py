@@ -6,6 +6,8 @@ Created on Fri May 25 11:52:58 2018
 @author: Walthall
 """
 
+from constants import gravity
+
 #calculate the air pressure given a specific altitude and temperature
 #height, h, given in metres above sea-level
 #temperature, T, given in degrees Celsius
@@ -17,7 +19,7 @@ def pressure(h, T):
     #reference temperature in Kelvin
     T_0 = T + 273.15
     #gravitational acceleration, in metres per second squared
-    g = 9.80665 #m/s^2
+    g = gravity #m/s^2
     #Molar mass of dry air
     M = 0.0289644 #kg/mol
     #universal gas constant in SI units

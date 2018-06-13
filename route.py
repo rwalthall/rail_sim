@@ -24,4 +24,13 @@ class Route(object):
         self.speed_limit = 60*1.6
         self.adhesion = 0.30
     
+    def current_speed_limit(self,x):
+        self.speed_limit = 60*1.6
+    
+    def determine_speed_limit(self,x):
+        return 60*1.6
+    
+    def track_adhesion(self,x):
+        self.adhesion = 0.30
+    
 
